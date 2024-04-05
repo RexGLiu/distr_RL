@@ -291,7 +291,7 @@ class Rainbow_DQN51_cross_ent(Rainbow):
     Q_a = ds_a.sum(1)  # Q-values for a_t
 
     # cross-entropy with uniform
-    cross_entropy = -torch.log(ps_a)
+    cross_entropy = torch.log(ps_a)
     cross_entropy = cross_entropy.sum(1)
 
     with torch.no_grad():
