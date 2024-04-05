@@ -22,6 +22,7 @@ class Rainbow():
     self.n = args.multi_step
     self.discount = args.discount
     self.norm_clip = args.norm_clip
+    self.track_grads = args.track_grads
 
     self.online_net = C51(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -95,10 +96,18 @@ class Rainbow():
     loss = -torch.sum(m * log_ps_a, 1)  # Cross-entropy loss (minimises DKL(m||p(s_t, a_t)))
     self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss" : loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
@@ -149,10 +158,19 @@ class Rainbow_DQN51(Rainbow):
     loss = F.mse_loss(Q_a, Q_target)
     self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
+
 
 class Rainbow_DQN51_v2(Rainbow):
   def __init__(self, args, env):
@@ -218,10 +236,19 @@ class Rainbow_DQN51_v2(Rainbow):
     loss = -torch.sum(m * log_ps_a, 1)  # Cross-entropy loss (minimises DKL(m||p(s_t, a_t)))
     self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
+
 
 class Rainbow_DQN51_v3(Rainbow):
   def learn(self, mem):
@@ -269,10 +296,18 @@ class Rainbow_DQN51_v3(Rainbow):
     loss = -torch.sum(m * log_ps_a, 1)  # Cross-entropy loss (minimises DKL(m||p(s_t, a_t)))
     self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
 
 class Rainbow_DQN51_cross_ent(Rainbow):
@@ -312,13 +347,39 @@ class Rainbow_DQN51_cross_ent(Rainbow):
       # Q_target = dns_a.sum(1)
 
     Q_loss = F.mse_loss(Q_a, Q_target)
-    loss = Q_loss + self.weight * cross_entropy
+
     self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * self.weight * cross_entropy).mean().backward(retain_graph=True)
+      cross_ent_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + cross_ent_grad
+
+    loss = Q_loss + self.weight * cross_entropy
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "mse_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "cross_entropy" : cross_entropy.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "cross_ent_grad" : cross_ent_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+
+    return losses, grad_norms
+
 
 class Rainbow_DQN51_ent(Rainbow):
   def __init__(self, args, env):
@@ -357,13 +418,38 @@ class Rainbow_DQN51_ent(Rainbow):
       # Q_target = dns_a.sum(1)
 
     Q_loss = F.mse_loss(Q_a, Q_target)
-    loss = Q_loss + self.weight * entropy
+
     self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * self.weight * entropy).mean().backward(retain_graph=True)
+      entropy_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + entropy_grad
+
+    loss = Q_loss + self.weight * entropy
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "mse_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "entropy" : entropy.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "entropy_grad" : entropy_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+
+    return losses, grad_norms
 
 class Rainbow_DQN():
   def __init__(self, args, env):
@@ -372,6 +458,7 @@ class Rainbow_DQN():
     self.n = args.multi_step
     self.discount = args.discount
     self.norm_clip = args.norm_clip
+    self.track_grads = args.track_grads
 
     self.online_net = DQN(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -429,10 +516,19 @@ class Rainbow_DQN():
     loss = F.mse_loss(Qs_a, Q_target)
     self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+
+    return losses, grad_norms
 
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
@@ -453,6 +549,10 @@ class Rainbow_DQN():
     self.online_net.eval()
 
 class Rainbow_mean_var_51(Rainbow):
+  def __init__(self, args, env):
+    super(Rainbow_mean_var_51, self).__init__(args, env)
+    self.weight = args.weight
+
   def learn(self, mem):
     # Sample transitions
     idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
@@ -485,13 +585,37 @@ class Rainbow_mean_var_51(Rainbow):
 
     Q_loss = F.mse_loss(Q_a, Q_target)
     var_loss = F.mse_loss(var_a, var_target)
-    loss = Q_loss + var_loss
+
     self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * var_loss).mean().backward(retain_graph=True)
+      var_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + var_loss_grad
+
+    loss = Q_loss + self.weight * var_loss
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "Q_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "var_loss" : self.weight * var_loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "var_loss_grad" : var_loss_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
 class Rainbow_mean_var_DQN():
   def __init__(self, args, env):
@@ -502,6 +626,7 @@ class Rainbow_mean_var_DQN():
     self.norm_clip = args.norm_clip
     self.weight = args.weight
     self.TD_clip = args.reward_clip
+    self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQN(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -563,13 +688,36 @@ class Rainbow_mean_var_DQN():
 
     Q_loss = F.mse_loss(Qs_a, Q_target)
     var_loss = F.mse_loss(var_Qs_a, var_target)
-    loss = Q_loss + self.weight * var_loss
     self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * self.weight * var_loss).mean().backward(retain_graph=True)
+      var_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + var_loss_grad
+
+    loss = Q_loss + self.weight * var_loss
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "Q_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "var_loss" : self.weight * var_loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "var_loss_grad" : var_loss_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
@@ -599,6 +747,7 @@ class Rainbow_mean_var_DQNa():
     self.norm_clip = args.norm_clip
     self.weight = args.weight
     self.TD_clip = args.reward_clip
+    self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQNa(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -660,13 +809,36 @@ class Rainbow_mean_var_DQNa():
 
     Q_loss = F.mse_loss(Qs_a, Q_target)
     var_loss = F.mse_loss(var_Qs_a, var_target)
-    loss = Q_loss + self.weight * var_loss
     self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * self.weight * var_loss).mean().backward(retain_graph=True)
+      var_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + var_loss_grad
+
+    loss = Q_loss + self.weight * var_loss
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "Q_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "var_loss" : self.weight * var_loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "var_loss_grad" : var_loss_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
@@ -696,6 +868,7 @@ class Rainbow_mean_var_DQN2():
     self.norm_clip = args.norm_clip
     self.weight = args.weight
     self.TD_clip = args.reward_clip
+    self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQN2(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
@@ -757,13 +930,36 @@ class Rainbow_mean_var_DQN2():
 
     Q_loss = F.mse_loss(Qs_a, Q_target)
     var_loss = F.mse_loss(var_Qs_a, var_target)
+    self.online_net.zero_grad()
+    if self.track_grads:
+      (weights * Q_loss).mean().backward(retain_graph=True)
+      Q_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      (weights * self.weight * var_loss).mean().backward(retain_graph=True)
+      var_loss_grad = clip_grad_norm_(self.online_net.parameters(), float('inf'))
+      self.online_net.zero_grad()
+
+      total_grad = Q_loss_grad + var_loss_grad
+
     loss = Q_loss + self.weight * var_loss
-    self.online_net.zero_grad()
     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
     self.optimiser.step()
 
     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "Q_loss" : Q_loss.detach().cpu().numpy().mean(),
+              "var_loss" : self.weight * var_loss.detach().cpu().numpy().mean()}
+    if self.track_grads:
+      grad_norms = {"total_grad": total_grad.detach().cpu().item(), "Q_loss_grad" : Q_loss_grad.detach().cpu().item(),
+                    "var_loss_grad" : var_loss_grad.detach().cpu().item(),
+                    "pre_clip_norm": pre_clip_norm.detach().cpu().item(),
+                    "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
 
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
@@ -784,106 +980,115 @@ class Rainbow_mean_var_DQN2():
   def eval(self):
     self.online_net.eval()
 
-class Rainbow_mean_var_skew_DQN():
-  def __init__(self, args, env):
-    self.action_space = env.action_space()
-    self.batch_size = args.batch_size
-    self.n = args.multi_step
-    self.discount = args.discount
-    self.norm_clip = args.norm_clip
-    self.weight = args.weight
-    self.TD_clip = args.reward_clip
-
-    self.online_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
-    if args.model:  # Load pretrained model if provided
-      if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
-      else:  # Raise error if incorrect model path provided
-        raise FileNotFoundError(args.model)
-
-    self.online_net.train()
-
-    self.target_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
-    self.update_target_net()
-    self.target_net.train()
-    for param in self.target_net.parameters():
-      param.requires_grad = False
-
-    self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
-
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
-  # Acts based on single state (no batch)
-  def act(self, state):
-    with torch.no_grad():
-      q, _ = self.online_net(state.unsqueeze(0))
-      return q.argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
-
-  def learn(self, mem):
-    # Sample transitions
-    idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
-
-    # Calculate current state probabilities (online network noise already sampled)
-    Qs, var_Qs, skew_Qs = self.online_net(states)  # Q(s_t, ·; θonline)
-    Qs_a, var_Qs_a, skew_Qs_a = Qs[range(self.batch_size), actions], var_Qs[range(self.batch_size), actions], skew_Qs[range(self.batch_size), actions]  # Q(s_t, a_t; θonline)
-
-    with torch.no_grad():
-      # Calculate nth next state probabilities
-      Qns, _, _ = self.online_net(next_states)  # Q(s_t+n, ·; θonline)
-      argmax_indices_ns = Qns.argmax(1)  # Perform argmax action selection using online network: argmax_a[Q(s_t+n, a; θonline)]
-      self.target_net.reset_noise()  # Sample new target net noise
-      Qns, var_Qns, skew_Qns = self.target_net(next_states)  # Q(s_t+n, ·; θtarget)
-      Qns_a, var_Qns_a, skew_Qns = Qns[range(self.batch_size), argmax_indices_ns], var_Qns[range(self.batch_size), argmax_indices_ns], skew_Qns[range(self.batch_size), argmax_indices_ns]  # Double-Q probabilities Q(s_t+n, argmax_a[Q(s_t+n, a; θonline)]; θtarget)
-      Q_target = returns + nonterminals.view(-1) * (self.discount ** self.n) * Qns_a  # Q_target = R^n + (γ^n)Qns_a (accounting for terminal states)
-
-      TD_err = (Q_target - Qs_a)
-      TD_err2 = TD_err**2
-      TD_err2 = torch.clamp(TD_err2, max=self.TD_clip)  # clipping to control scale of update
-      var_target = TD_err2 + nonterminals.view(-1) * (self.discount ** (2*self.n)) * var_Qns_a
-
-      var_err = (var_target - skew_Qs_a)
-      skew_R = TD_err**3 + 3*TD_err*var_err
-      skew_R = torch.clamp(skew_R, max=self.TD_clip)  # clipping to control scale of update
-      skew_target = skew_R + nonterminals.view(-1) * (self.discount ** (3*self.n)) * skew_Qns_a
-
-    Q_loss = F.mse_loss(Qs_a, Q_target)
-    var_loss = self.weight * F.mse_loss(var_Qs_a, var_target)
-    skew_loss = self.weight * F.mse_loss(skew_Qs_a, skew_target)
-    loss = Q_loss + self.weight * var_loss + self.weight * skew_loss
-    self.online_net.zero_grad()
-    (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
-    clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
-    self.optimiser.step()
-
-    mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
-
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
-  # Evaluates Q-value based on single state (no batch)
-  def evaluate_q(self, state):
-    with torch.no_grad():
-      q, _ = self.online_net(state.unsqueeze(0))
-      return q.max(1)[0].item()
-
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
+# class Rainbow_mean_var_skew_DQN():
+#   def __init__(self, args, env):
+#     self.action_space = env.action_space()
+#     self.batch_size = args.batch_size
+#     self.n = args.multi_step
+#     self.discount = args.discount
+#     self.norm_clip = args.norm_clip
+#     self.weight = args.weight
+#     self.TD_clip = args.reward_clip
+#     self.track_grads = args.track_grads
+#
+#     self.online_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
+#     if args.model:  # Load pretrained model if provided
+#       if os.path.isfile(args.model):
+#         state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
+#         if 'conv1.weight' in state_dict.keys():
+#           for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+#             state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+#             del state_dict[old_key]  # Delete old keys for strict load_state_dict
+#         self.online_net.load_state_dict(state_dict)
+#         print("Loading pretrained model: " + args.model)
+#       else:  # Raise error if incorrect model path provided
+#         raise FileNotFoundError(args.model)
+#
+#     self.online_net.train()
+#
+#     self.target_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
+#     self.update_target_net()
+#     self.target_net.train()
+#     for param in self.target_net.parameters():
+#       param.requires_grad = False
+#
+#     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+#
+#   # Resets noisy weights in all linear layers (of online net only)
+#   def reset_noise(self):
+#     self.online_net.reset_noise()
+#
+#   # Acts based on single state (no batch)
+#   def act(self, state):
+#     with torch.no_grad():
+#       q, _ = self.online_net(state.unsqueeze(0))
+#       return q.argmax(1).item()
+#
+#   # Acts with an ε-greedy policy (used for evaluation only)
+#   def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
+#     return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
+#
+#   def learn(self, mem):
+#     # Sample transitions
+#     idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
+#
+#     # Calculate current state probabilities (online network noise already sampled)
+#     Qs, var_Qs, skew_Qs = self.online_net(states)  # Q(s_t, ·; θonline)
+#     Qs_a, var_Qs_a, skew_Qs_a = Qs[range(self.batch_size), actions], var_Qs[range(self.batch_size), actions], skew_Qs[range(self.batch_size), actions]  # Q(s_t, a_t; θonline)
+#
+#     with torch.no_grad():
+#       # Calculate nth next state probabilities
+#       Qns, _, _ = self.online_net(next_states)  # Q(s_t+n, ·; θonline)
+#       argmax_indices_ns = Qns.argmax(1)  # Perform argmax action selection using online network: argmax_a[Q(s_t+n, a; θonline)]
+#       self.target_net.reset_noise()  # Sample new target net noise
+#       Qns, var_Qns, skew_Qns = self.target_net(next_states)  # Q(s_t+n, ·; θtarget)
+#       Qns_a, var_Qns_a, skew_Qns = Qns[range(self.batch_size), argmax_indices_ns], var_Qns[range(self.batch_size), argmax_indices_ns], skew_Qns[range(self.batch_size), argmax_indices_ns]  # Double-Q probabilities Q(s_t+n, argmax_a[Q(s_t+n, a; θonline)]; θtarget)
+#       Q_target = returns + nonterminals.view(-1) * (self.discount ** self.n) * Qns_a  # Q_target = R^n + (γ^n)Qns_a (accounting for terminal states)
+#
+#       TD_err = (Q_target - Qs_a)
+#       TD_err2 = TD_err**2
+#       TD_err2 = torch.clamp(TD_err2, max=self.TD_clip)  # clipping to control scale of update
+#       var_target = TD_err2 + nonterminals.view(-1) * (self.discount ** (2*self.n)) * var_Qns_a
+#
+#       var_err = (var_target - skew_Qs_a)
+#       skew_R = TD_err**3 + 3*TD_err*var_err
+#       skew_R = torch.clamp(skew_R, max=self.TD_clip)  # clipping to control scale of update
+#       skew_target = skew_R + nonterminals.view(-1) * (self.discount ** (3*self.n)) * skew_Qns_a
+#
+#     Q_loss = F.mse_loss(Qs_a, Q_target)
+#     var_loss = self.weight * F.mse_loss(var_Qs_a, var_target)
+#     skew_loss = self.weight * F.mse_loss(skew_Qs_a, skew_target)
+#     loss = Q_loss + self.weight * var_loss + self.weight * skew_loss
+#     self.online_net.zero_grad()
+#     (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
+#     pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
+#     post_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+#     self.optimiser.step()
+#
+#     mem.update_priorities(idxs, Q_loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+#
+#     losses = {"total loss": loss.detach().cpu().numpy().mean(), "Q_loss" : Q_loss.detach().cpu().numpy().mean(),
+#               "var_loss" : var_loss.detach().cpu().numpy().mean(),
+#               "skew_loss": skew_loss.detach().cpu().numpy().mean()}
+#     grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+#     return losses, grad_norms
+#
+#   def update_target_net(self):
+#     self.target_net.load_state_dict(self.online_net.state_dict())
+#
+#   # Save model parameters on current device (don't move model between devices)
+#   def save(self, path, name='model.pth'):
+#     torch.save(self.online_net.state_dict(), os.path.join(path, name))
+#
+#   # Evaluates Q-value based on single state (no batch)
+#   def evaluate_q(self, state):
+#     with torch.no_grad():
+#       q, _ = self.online_net(state.unsqueeze(0))
+#       return q.max(1)[0].item()
+#
+#   def train(self):
+#     self.online_net.train()
+#
+#   def eval(self):
+#     self.online_net.eval()
+#

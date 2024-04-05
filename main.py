@@ -27,10 +27,10 @@ parser.add_argument('--id', type=str, default='default', help='Experiment ID')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
 parser.add_argument('--game', type=str, default='space_invaders', choices=atari_py.list_games(), help='ATARI game')
-parser.add_argument('--algo', type=str, default='Rainbow_C51', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_DQN', 'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
-                                                                        'Rainbow_mean_var_DQNa',
-                                                                        'Rainbow_mean_var_51', 'Rainbow_DQN51_ent', 'Rainbow_DQN51_cross_ent', 'Rainbow_DQN51_v2',
-                                                                        'Rainbow_DQN51_v3'], help='Which RL algorithm to run')
+parser.add_argument('--algo', type=str, default='Rainbow', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_DQN', 'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
+                                                                    'Rainbow_mean_var_DQNa', 'Rainbow_mean_var_51',
+                                                                    'Rainbow_DQN51_ent', 'Rainbow_DQN51_cross_ent', 'Rainbow_DQN51_v2',
+                                                                    'Rainbow_DQN51_v3'], help='Which RL algorithm to run')
 parser.add_argument('--T-max', type=int, default=int(50e6), metavar='STEPS', help='Number of training steps (4x number of frames)')
 parser.add_argument('--max-episode-length', type=int, default=int(108e3), metavar='LENGTH', help='Max episode length in game frames (0 to disable)')
 parser.add_argument('--history-length', type=int, default=4, metavar='T', help='Number of consecutive states processed')
@@ -66,6 +66,7 @@ parser.add_argument('--memory', help='Path to save/load the memory from')
 parser.add_argument('--disable-bzip-memory', action='store_true', help='Don\'t zip the memory file. Not recommended (zipping is a bit slower and much, much smaller)')
 parser.add_argument('--enable-wandb', action='store_true', help='Enable Weights and Biases for logging')
 parser.add_argument('--weight', type=float, default=1, metavar='lambda', help='Weight for auxiliary loss')
+parser.add_argument('--track-grads', action='store_false', help='Track gradients.')
 
 # Setup
 args = parser.parse_args()
@@ -207,14 +208,17 @@ else:
       mem.priority_weight = min(mem.priority_weight + priority_weight_increase, 1)  # Anneal importance sampling weight β to 1
 
       if T % args.replay_frequency == 0:
-        agent.learn(mem)  # Train with n-step distributional double-Q learning
+        losses, grad_norms = agent.learn(mem)  # Train with n-step distributional double-Q learning
 
       if T % args.evaluation_interval == 0:
         agent.eval()  # Set online network to evaluation mode
         avg_reward, avg_Q = test(args, T, agent, val_mem, metrics, seed_dir)  # Test
         log('T = ' + str(T) + ' / ' + str(args.T_max) + ' | Avg. reward: ' + str(avg_reward) + ' | Avg. Q: ' + str(avg_Q))
         if args.enable_wandb:
-          wandb.log({"Avg eval reward": avg_reward, "Avg eval Q": avg_Q})
+          log_dict = {"Avg eval reward": avg_reward, "Avg eval Q": avg_Q}
+          log_dict.update(losses)
+          log_dict.update(grad_norms)
+          wandb.log(log_dict)
         agent.train()  # Set online network back to training mode
 
         # If memory path provided, save it
