@@ -9,8 +9,29 @@ import torch.nn.functional as F
 
 from model import C51, DQN, mean_var_DQN, mean_var_DQN2, mean_var_DQNa, mean_var_skew_DQN, vector_DQN
 
+class BaseAgent():
+  # Resets noisy weights in all linear layers (of online net only)
+  def reset_noise(self):
+    self.online_net.reset_noise()
 
-class Rainbow():
+  # Acts with an ε-greedy policy (used for evaluation only)
+  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
+    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
+
+  def update_target_net(self):
+    self.target_net.load_state_dict(self.online_net.state_dict())
+
+  # Save model parameters on current device (don't move model between devices)
+  def save(self, path, name='model.pth'):
+    torch.save(self.online_net.state_dict(), os.path.join(path, name))
+
+  def train(self):
+    self.online_net.train()
+
+  def eval(self):
+    self.online_net.eval()
+
+class Rainbow(BaseAgent):
   def __init__(self, args, env):
     self.action_space = env.action_space()
     self.atoms = args.atoms
@@ -47,18 +68,10 @@ class Rainbow():
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
       return (self.online_net(state.unsqueeze(0)) * self.support).sum(2).argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 
   def learn(self, mem):
     # Sample transitions
@@ -109,23 +122,10 @@ class Rainbow():
       grad_norms = {}
     return losses, grad_norms
 
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
   # Evaluates Q-value based on single state (no batch)
   def evaluate_q(self, state):
     with torch.no_grad():
       return (self.online_net(state.unsqueeze(0)) * self.support).sum(2).max(1)[0].item()
-
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
 
 class Rainbow_DQN51(Rainbow):
   def learn(self, mem):
@@ -171,7 +171,7 @@ class Rainbow_DQN51(Rainbow):
       grad_norms = {}
     return losses, grad_norms
 
-class Rainbow_DQN():
+class Rainbow_DQN(BaseAgent):
   def __init__(self, args, env):
     self.action_space = env.action_space()
     self.batch_size = args.batch_size
@@ -203,18 +203,10 @@ class Rainbow_DQN():
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
       return self.online_net(state.unsqueeze(0)).argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 
   def learn(self, mem):
     # Sample transitions
@@ -250,24 +242,10 @@ class Rainbow_DQN():
 
     return losses, grad_norms
 
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
   # Evaluates Q-value based on single state (no batch)
   def evaluate_q(self, state):
     with torch.no_grad():
       return self.online_net(state.unsqueeze(0)).max(1)[0].item()
-
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
-
 
 class Rainbow_DQN51_v2(Rainbow):
   '''Encode mean with an entropic uniform distribution.'''
@@ -347,7 +325,6 @@ class Rainbow_DQN51_v2(Rainbow):
       grad_norms = {}
     return losses, grad_norms
 
-
 class Rainbow_DQN51_v3(Rainbow):
   '''2-hot encoding of mean'''
   def learn(self, mem):
@@ -407,7 +384,6 @@ class Rainbow_DQN51_v3(Rainbow):
     else:
       grad_norms = {}
     return losses, grad_norms
-
 
 class Rainbow_DQN51_cross_ent(Rainbow):
   def __init__(self, args, env):
@@ -618,7 +594,7 @@ class Rainbow_mean_var_51(Rainbow):
       grad_norms = {}
     return losses, grad_norms
 
-class Rainbow_mean_var_DQN():
+class Rainbow_mean_var_DQN(BaseAgent):
   '''Noisy two-stream architecture forking from the last conv layer.'''
   def __init__(self, args, env):
     self.action_space = env.action_space()
@@ -653,19 +629,11 @@ class Rainbow_mean_var_DQN():
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 
   def learn(self, mem):
     # Sample transitions
@@ -721,26 +689,13 @@ class Rainbow_mean_var_DQN():
       grad_norms = {}
     return losses, grad_norms
 
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
   # Evaluates Q-value based on single state (no batch)
   def evaluate_q(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.max(1)[0].item()
 
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
-
-class Rainbow_mean_var_DQNa():
+class Rainbow_mean_var_DQNa(BaseAgent):
   '''Noiseless variance stream architecture forking from the last conv layer.'''
   def __init__(self, args, env):
     self.action_space = env.action_space()
@@ -775,19 +730,11 @@ class Rainbow_mean_var_DQNa():
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 
   def learn(self, mem):
     # Sample transitions
@@ -843,26 +790,13 @@ class Rainbow_mean_var_DQNa():
       grad_norms = {}
     return losses, grad_norms
 
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
   # Evaluates Q-value based on single state (no batch)
   def evaluate_q(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.max(1)[0].item()
 
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
-
-class Rainbow_mean_var_DQN2():
+class Rainbow_mean_var_DQN2(BaseAgent):
   '''Noisy two-stream architecture forking from penultimate layer.'''
   def __init__(self, args, env):
     self.action_space = env.action_space()
@@ -897,19 +831,11 @@ class Rainbow_mean_var_DQN2():
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 
-  # Resets noisy weights in all linear layers (of online net only)
-  def reset_noise(self):
-    self.online_net.reset_noise()
-
   # Acts based on single state (no batch)
   def act(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.argmax(1).item()
-
-  # Acts with an ε-greedy policy (used for evaluation only)
-  def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-    return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 
   def learn(self, mem):
     # Sample transitions
@@ -965,31 +891,18 @@ class Rainbow_mean_var_DQN2():
       grad_norms = {}
     return losses, grad_norms
 
-  def update_target_net(self):
-    self.target_net.load_state_dict(self.online_net.state_dict())
-
-  # Save model parameters on current device (don't move model between devices)
-  def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
-
   # Evaluates Q-value based on single state (no batch)
   def evaluate_q(self, state):
     with torch.no_grad():
       q, _ = self.online_net(state.unsqueeze(0))
       return q.max(1)[0].item()
 
-  def train(self):
-    self.online_net.train()
-
-  def eval(self):
-    self.online_net.eval()
-
 '''
 1) rand slope and output biases
 2) rand slope, vert shifts
 3) rand slope, output biases, vertical shifts
 '''
-class Rainbow_vec_DQN(Rainbow):
+class Rainbow_vec_DQN(BaseAgent):
   def __init__(self, args, env):
     self.action_space = env.action_space()
     self.atoms = args.atoms
@@ -1076,7 +989,7 @@ class Rainbow_vec_DQN(Rainbow):
     with torch.no_grad():
       return (self.online_net(state.unsqueeze(0)) - self.Q_biases).mean(2).max(1)[0].item()
 
-# class Rainbow_mean_var_skew_DQN():
+# class Rainbow_mean_var_skew_DQN(BaseAgent):
 #   def __init__(self, args, env):
 #     self.action_space = env.action_space()
 #     self.batch_size = args.batch_size
@@ -1110,19 +1023,11 @@ class Rainbow_vec_DQN(Rainbow):
 #
 #     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
 #
-#   # Resets noisy weights in all linear layers (of online net only)
-#   def reset_noise(self):
-#     self.online_net.reset_noise()
-#
 #   # Acts based on single state (no batch)
 #   def act(self, state):
 #     with torch.no_grad():
 #       q, _ = self.online_net(state.unsqueeze(0))
 #       return q.argmax(1).item()
-#
-#   # Acts with an ε-greedy policy (used for evaluation only)
-#   def act_e_greedy(self, state, epsilon=0.001):  # High ε can reduce evaluation scores drastically
-#     return np.random.randint(0, self.action_space) if np.random.random() < epsilon else self.act(state)
 #
 #   def learn(self, mem):
 #     # Sample transitions
@@ -1169,22 +1074,9 @@ class Rainbow_vec_DQN(Rainbow):
 #     grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
 #     return losses, grad_norms
 #
-#   def update_target_net(self):
-#     self.target_net.load_state_dict(self.online_net.state_dict())
-#
-#   # Save model parameters on current device (don't move model between devices)
-#   def save(self, path, name='model.pth'):
-#     torch.save(self.online_net.state_dict(), os.path.join(path, name))
-#
 #   # Evaluates Q-value based on single state (no batch)
 #   def evaluate_q(self, state):
 #     with torch.no_grad():
 #       q, _ = self.online_net(state.unsqueeze(0))
 #       return q.max(1)[0].item()
-#
-#   def train(self):
-#     self.online_net.train()
-#
-#   def eval(self):
-#     self.online_net.eval()
 #
