@@ -344,17 +344,29 @@ class vector_DQN(C51):
     self.register_buffer('shifts_a', shifts_a)
     self.register_buffer('Q_biases', Q_biases)
 
-  def forward(self, x):
+  def forward(self, x, check_saturation=False):
     x = self.convs(x)
     x = x.view(-1, self.conv_output_size)
     v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
     a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
     v *= self.tnh_slopes_v
     a *= self.tnh_slopes_a
-    v = self.Vmax * torch.tanh(v) + self.shifts_v
-    a = self.Vmax * torch.tanh(a) + self.shifts_a
+
+    if check_saturation:
+      v = self.Vmax * torch.tanh(v)
+      a = self.Vmax * torch.tanh(a)
+      max_v = torch.max(torch.abs(v)).detach()
+      max_a = torch.max(torch.abs(a)).detach()
+      v += self.shifts_v
+      a += self.shifts_a
+    else:
+      v = self.Vmax * torch.tanh(v) + self.shifts_v
+      a = self.Vmax * torch.tanh(a) + self.shifts_a
 
     v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
     q = v + a - a.mean(1, keepdim=True)  # Combine streams
 
-    return q
+    if check_saturation:
+      return q, max_v, max_a
+    else:
+      return q

@@ -1051,9 +1051,9 @@ class Rainbow_vec_DQN(BaseAgent):
     idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
 
     # Calculate current state-action values (online network noise already sampled)
-    Qs = self.online_net(states)  # Q(s_t, ·; θonline)
+    Qs, max_v, max_a = self.online_net(states, check_saturation=True)  # Q(s_t, ·; θonline)
     Qs_a = Qs[range(self.batch_size), actions, :]  # Q(s_t, a_t; θonline)
-    max_Q = torch.max(torch.abs(Qs)).detach().cpu().item()
+    max_v, max_a = max_v.cpu().item(), max_a.cpu().item()
 
     with torch.no_grad():
       # Calculate target Q-values
@@ -1078,7 +1078,7 @@ class Rainbow_vec_DQN(BaseAgent):
 
     mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
 
-    losses = {"total loss": loss.detach().cpu().numpy().mean(), "max Q output": max_Q}
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "max v output": max_v, "max a output": max_a}
     if self.track_grads:
       grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
     else:
