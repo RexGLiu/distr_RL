@@ -21,9 +21,14 @@ class BaseAgent():
   def update_target_net(self):
     self.target_net.load_state_dict(self.online_net.state_dict())
 
-  # Save model parameters on current device (don't move model between devices)
+  # Save checkpoint (model params, target params, optimiser state) on current device (don't move model between devices)
   def save(self, path, name='model.pth'):
-    torch.save(self.online_net.state_dict(), os.path.join(path, name))
+    checkpoint = {"online_state_dict" : self.online_net.state_dict(),
+                  "optimiser_state_dict" : self.optimiser.state_dict(),
+                  "target_state_dict" : self.target_net.state_dict()
+                  }
+
+    torch.save(checkpoint, os.path.join(path, name))
 
   def train(self):
     self.online_net.train()
@@ -46,27 +51,43 @@ class Rainbow(BaseAgent):
     self.track_grads = args.track_grads
 
     self.online_net = C51(args, self.action_space).to(device=args.device)
+    self.target_net = C51(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
 
-    self.online_net.train()
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
 
-    self.target_net = C51(args, self.action_space).to(device=args.device)
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
+
+    self.online_net.train()
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   # Acts based on single state (no batch)
   def act(self, state):
@@ -181,27 +202,43 @@ class Rainbow_DQN(BaseAgent):
     self.track_grads = args.track_grads
 
     self.online_net = DQN(args, self.action_space).to(device=args.device)
+    self.target_net = DQN(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
 
-    self.online_net.train()
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
 
-    self.target_net = DQN(args, self.action_space).to(device=args.device)
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
+
+    self.online_net.train()
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   # Acts based on single state (no batch)
   def act(self, state):
@@ -607,27 +644,43 @@ class Rainbow_mean_var_DQN(BaseAgent):
     self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQN(args, self.action_space).to(device=args.device)
+    self.target_net = mean_var_DQN(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
 
-    self.online_net.train()
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
 
-    self.target_net = mean_var_DQN(args, self.action_space).to(device=args.device)
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
+
+    self.online_net.train()
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   # Acts based on single state (no batch)
   def act(self, state):
@@ -708,27 +761,43 @@ class Rainbow_mean_var_DQNa(BaseAgent):
     self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQNa(args, self.action_space).to(device=args.device)
+    self.target_net = mean_var_DQNa(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
 
-    self.online_net.train()
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
 
-    self.target_net = mean_var_DQNa(args, self.action_space).to(device=args.device)
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
+
+    self.online_net.train()
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   # Acts based on single state (no batch)
   def act(self, state):
@@ -809,27 +878,43 @@ class Rainbow_mean_var_DQN2(BaseAgent):
     self.track_grads = args.track_grads
 
     self.online_net = mean_var_DQN2(args, self.action_space).to(device=args.device)
+    self.target_net = mean_var_DQN2(args, self.action_space).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
 
-    self.online_net.train()
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
 
-    self.target_net = mean_var_DQN2(args, self.action_space).to(device=args.device)
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
+
+    self.online_net.train()
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   # Acts based on single state (no batch)
   def act(self, state):
@@ -916,30 +1001,46 @@ class Rainbow_vec_DQN(BaseAgent):
     self.target_mean = args.vec_target_mean
 
     self.online_net = vector_DQN(args, self.action_space).to(device=args.device)
+    self.target_net = vector_DQN(args, self.action_space, self.online_net).to(device=args.device)
     if args.model:  # Load pretrained model if provided
       if os.path.isfile(args.model):
-        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-        if 'conv1.weight' in state_dict.keys():
-          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-            del state_dict[old_key]  # Delete old keys for strict load_state_dict
-        self.online_net.load_state_dict(state_dict)
-        print("Loading pretrained model: " + args.model)
+        checkpoint = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
       else:  # Raise error if incorrect model path provided
         raise FileNotFoundError(args.model)
+
+      state_dict = checkpoint["online_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.online_net.load_state_dict(state_dict)
+
+      state_dict = checkpoint["target_state_dict"]
+      if 'conv1.weight' in state_dict.keys():
+        for old_key, new_key in (
+        ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+        ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+          state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+          del state_dict[old_key]  # Delete old keys for strict load_state_dict
+      self.target_net.load_state_dict(state_dict)
+
+      print("Loading pretrained model: " + args.model)
 
     self.Q_biases = self.online_net.Q_biases
     self.Q_biases_expanded = self.Q_biases.expand(self.batch_size, self.action_space, self.atoms)
 
     self.online_net.train()
-
-    self.target_net = vector_DQN(args, self.action_space, self.online_net).to(device=args.device)
     self.update_target_net()
     self.target_net.train()
     for param in self.target_net.parameters():
       param.requires_grad = False
 
     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+    if args.model:
+      optimiser_dict = checkpoint["optimiser_state_dict"]
+      self.optimiser.load_state_dict(optimiser_dict)
 
   def act(self, state):
     with torch.no_grad():
@@ -1001,27 +1102,44 @@ class Rainbow_vec_DQN(BaseAgent):
 #     self.track_grads = args.track_grads
 #
 #     self.online_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
+#     self.target_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
 #     if args.model:  # Load pretrained model if provided
 #       if os.path.isfile(args.model):
-#         state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
-#         if 'conv1.weight' in state_dict.keys():
-#           for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
-#             state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
-#             del state_dict[old_key]  # Delete old keys for strict load_state_dict
-#         self.online_net.load_state_dict(state_dict)
-#         print("Loading pretrained model: " + args.model)
+#         checkpoint = torch.load(args.model,
+#                                 map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
 #       else:  # Raise error if incorrect model path provided
 #         raise FileNotFoundError(args.model)
 #
-#     self.online_net.train()
+#       state_dict = checkpoint["online_state_dict"]
+#       if 'conv1.weight' in state_dict.keys():
+#         for old_key, new_key in (
+#                 ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+#                 ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+#           state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+#           del state_dict[old_key]  # Delete old keys for strict load_state_dict
+#       self.online_net.load_state_dict(state_dict)
 #
-#     self.target_net = mean_var_skew_DQN(args, self.action_space).to(device=args.device)
+#       state_dict = checkpoint["target_state_dict"]
+#       if 'conv1.weight' in state_dict.keys():
+#         for old_key, new_key in (
+#                 ('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'),
+#                 ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+#           state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+#           del state_dict[old_key]  # Delete old keys for strict load_state_dict
+#       self.target_net.load_state_dict(state_dict)
+#
+#       print("Loading pretrained model: " + args.model)
+#
+#     self.online_net.train()
 #     self.update_target_net()
 #     self.target_net.train()
 #     for param in self.target_net.parameters():
 #       param.requires_grad = False
 #
 #     self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+#     if args.model:
+#       optimiser_dict = checkpoint["optimiser_state_dict"]
+#       self.optimiser.load_state_dict(optimiser_dict)
 #
 #   # Acts based on single state (no batch)
 #   def act(self, state):

@@ -25,7 +25,14 @@ import wandb
 parser = argparse.ArgumentParser(description='Rainbow')
 parser.add_argument('--id', type=str, default='default', help='Experiment ID')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
+parser.add_argument('--load-interval', type=int, default=0, help='Which checkpoint interval to load.')
+parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
+parser.add_argument('--enable-wandb', action='store_true', help='Enable Weights and Biases for logging')
+parser.add_argument('--track-grads', action='store_false', help='Track gradients.')
+parser.add_argument('--render', action='store_true', help='Display screen (testing only)')
+
+# Warning: all parameters below will be ignored if loading from checkpoint
 parser.add_argument('--game', type=str, default='space_invaders', choices=atari_py.list_games(), help='ATARI game')
 parser.add_argument('--algo', type=str, default='Rainbow', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_DQN', 'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
                                                                     'Rainbow_mean_var_DQNa', 'Rainbow_mean_var_51', 'Rainbow_vec_DQN',
@@ -40,7 +47,6 @@ parser.add_argument('--noisy-std', type=float, default=0.1, metavar='σ', help='
 parser.add_argument('--atoms', type=int, default=51, metavar='C', help='Discretised size of value distribution')
 parser.add_argument('--V-min', type=float, default=-10, metavar='V', help='Minimum of value distribution support')
 parser.add_argument('--V-max', type=float, default=10, metavar='V', help='Maximum of value distribution support')
-parser.add_argument('--model', type=str, metavar='PARAMS', help='Pretrained model (state dict)')
 parser.add_argument('--memory-capacity', type=int, default=int(1e6), metavar='CAPACITY', help='Experience replay memory capacity')
 parser.add_argument('--replay-frequency', type=int, default=4, metavar='k', help='Frequency of sampling from memory')
 parser.add_argument('--priority-exponent', type=float, default=0.5, metavar='ω', help='Prioritised experience replay exponent (originally denoted α)')
@@ -54,36 +60,48 @@ parser.add_argument('--adam-eps', type=float, default=1.5e-4, metavar='ε', help
 parser.add_argument('--batch-size', type=int, default=32, metavar='SIZE', help='Batch size')
 parser.add_argument('--norm-clip', type=float, default=10, metavar='NORM', help='Max L2 norm for gradient clipping')
 parser.add_argument('--learn-start', type=int, default=int(20e3), metavar='STEPS', help='Number of steps before starting training')
-parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=100000, metavar='STEPS', help='Number of training steps between evaluations')
 parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 # TODO: Note that DeepMind's evaluation method is running the latest agent for 500K frames ever every 1M steps
 parser.add_argument('--evaluation-size', type=int, default=500, metavar='N', help='Number of transitions to use for validating Q')
-parser.add_argument('--render', action='store_true', help='Display screen (testing only)')
 parser.add_argument('--enable-cudnn', action='store_true', help='Enable cuDNN (faster but nondeterministic)')
 parser.add_argument('--checkpoint-interval', type=int, default=0, help='How often to checkpoint the model, defaults to 0 (never checkpoint)')
-parser.add_argument('--memory', help='Path to save/load the memory from')
 parser.add_argument('--disable-bzip-memory', action='store_true', help='Don\'t zip the memory file. Not recommended (zipping is a bit slower and much, much smaller)')
-parser.add_argument('--enable-wandb', action='store_true', help='Enable Weights and Biases for logging')
 parser.add_argument('--weight', type=float, default=1, metavar='w', help='Weight for auxiliary loss')
 parser.add_argument('--max-tnh-shift', type=float, default=1.5, metavar='K', help='Maximum range for random shifts to apply to tanh outputs in vector DQN.')
 parser.add_argument('--tnh-slope', type=float, default=(0.1,5), metavar='b', help='Range of slopes for tanh inputs in vector DQN.')
 parser.add_argument('--Q-bias', type=float, default=1.5, metavar='Q_bias', help='Maximum range of random biases to apply to vector Q-values.')
 parser.add_argument('--vec-target-mean', action='store_false', help='Whether to construct target Q-value from averaging across all atoms or not in vector_DQN.')
-parser.add_argument('--track-grads', action='store_false', help='Track gradients.')
 
 # Setup
 args = parser.parse_args()
-
-print(' ' * 26 + 'Options')
-for k, v in vars(args).items():
-  print(' ' * 26 + k + ': ' + str(v))
+args.model = None  # default is not to load a checkpointed model
 results_dir = os.path.join('/users/rliu70/scratch/Rainbow', args.id)
 seed_dir = os.path.join(results_dir, f'{args.seed}')
 if not os.path.exists(results_dir):
   os.makedirs(results_dir)
 if not os.path.exists(seed_dir):
   os.makedirs(seed_dir)
+
+args_path = os.path.join(seed_dir, "run_arguments.pkl")
+if args.load_interval > 0:
+  with open(args_path, 'rb') as pickle_file:
+    args2 = pickle.load(pickle_file)
+    args2.load_interval = args.load_interval
+    args2.evaluate = args.evaluate
+    args2.disable_cuda = args.disable_cuda
+    args2.enable_wandb = args.enable_wandb
+    args2.track_grads = args.track_grads
+    args2.render = args.render
+    args = args2
+    args.model = os.path.join(seed_dir, f'checkpoint_{args.load_interval}.pth')
+elif (args.checkpoint_interval != 0):
+  with open(args_path, 'wb') as pickle_file:
+    pickle.dump(args, pickle_file)
+
+print(' ' * 26 + 'Options')
+for k, v in vars(args).items():
+  print(' ' * 26 + k + ': ' + str(v))
 
 metrics = {'steps': [], 'rewards': [], 'Qs': [], 'best_avg_reward': -float('inf')}
 np.random.seed(args.seed)
@@ -102,21 +120,28 @@ def log(s):
 
 
 def load_memory(memory_path, disable_bzip):
+  print("Loading memory: " + memory_path)
   if disable_bzip:
     with open(memory_path, 'rb') as pickle_file:
-      return pickle.load(pickle_file)
+      mem = pickle.load(pickle_file)
+      T = pickle.load(pickle_file)
+      return mem, T
   else:
     with bz2.open(memory_path, 'rb') as zipped_pickle_file:
-      return pickle.load(zipped_pickle_file)
+      mem = pickle.load(zipped_pickle_file)
+      T = pickle.load(zipped_pickle_file)
+      return mem, T
 
 
-def save_memory(memory, memory_path, disable_bzip):
+def save_memory(memory, memory_path, disable_bzip, interval):
   if disable_bzip:
     with open(memory_path, 'wb') as pickle_file:
       pickle.dump(memory, pickle_file)
+      pickle.dump(interval, pickle_file)
   else:
     with bz2.open(memory_path, 'wb') as zipped_pickle_file:
       pickle.dump(memory, zipped_pickle_file)
+      pickle.dump(interval, zipped_pickle_file)
 
 if args.enable_wandb:
   wandb.login()
@@ -160,16 +185,15 @@ elif args.algo == "Rainbow_mean_var_51":
   agent = Rainbow_mean_var_51(args, env)
 
 # If a model is provided, and evaluate is false, presumably we want to resume, so try to load memory
-if args.model is not None and not args.evaluate:
-  if not args.memory:
-    raise ValueError('Cannot resume training without memory save path. Aborting...')
-  elif not os.path.exists(args.memory):
-    raise ValueError('Could not find memory file at {path}. Aborting...'.format(path=args.memory))
-
-  mem = load_memory(args.memory, args.disable_bzip_memory)
+# Timestamp for memory buffer also loaded here.
+if args.load_interval > 0 and not args.evaluate:
+  mem_path = os.path.join(seed_dir, f'mem_ckpoint_{args.load_interval}.pth')
+  if not os.path.exists(mem_path):
+    raise ValueError('Could not find memory file at {path}. Aborting...'.format(path=mem_path))
+  mem, t_init = load_memory(mem_path, args.disable_bzip_memory)
 
 else:
-  mem = ReplayMemory(args, args.memory_capacity)
+  mem, t_init = ReplayMemory(args, args.memory_capacity), 1
 
 priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn_start)
 
@@ -177,14 +201,15 @@ priority_weight_increase = (1 - args.priority_weight) / (args.T_max - args.learn
 # Construct validation memory
 val_mem = ReplayMemory(args, args.evaluation_size)
 T, done = 0, True
-while T < args.evaluation_size:
-  if done:
-    state = env.reset()
+if args.load_interval == 0:  # only if training from scratch
+  while T < args.evaluation_size:
+    if done:
+      state = env.reset()
 
-  next_state, _, done = env.step(np.random.randint(0, action_space))
-  val_mem.append(state, -1, 0.0, done)
-  state = next_state
-  T += 1
+    next_state, _, done = env.step(np.random.randint(0, action_space))
+    val_mem.append(state, -1, 0.0, done)
+    state = next_state
+    T += 1
 
 if args.evaluate:
   agent.eval()  # Set online network to evaluation mode
@@ -196,7 +221,7 @@ else:
   # Training loop
   agent.train()
   done = True
-  for T in trange(1, args.T_max + 1):
+  for T in trange(t_init+1, args.T_max + 1):
     if done:
       state = env.reset()
 
@@ -227,10 +252,6 @@ else:
           wandb.log(log_dict)
         agent.train()  # Set online network back to training mode
 
-        # If memory path provided, save it
-        if args.memory is not None:
-          save_memory(mem, args.memory, args.disable_bzip_memory)
-
       # Update target network
       if T % args.target_update == 0:
         agent.update_target_net()
@@ -238,6 +259,8 @@ else:
       # Checkpoint the network
       if (args.checkpoint_interval != 0) and (T % args.checkpoint_interval == 0):
         agent.save(seed_dir, f'checkpoint_{T}.pth')
+        mem_path = os.path.join(seed_dir, f'mem_ckpoint_{T}.pth')
+        save_memory(mem, mem_path, args.disable_bzip_memory, T)  # save replay buffer
 
     state = next_state
 
