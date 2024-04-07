@@ -300,3 +300,61 @@ class mean_var_skew_DQN(nn.Module):
     for name, module in self.named_children():
       if 'fc' in name:
         module.reset_noise()
+
+class vector_DQN(C51):
+  '''Random slopes and output biases.'''
+  def __init__(self, args, action_space, source_net=None):
+    super(vector_DQN, self).__init__(args, action_space)
+    self.Vmax = args.V_max
+
+    if source_net is None:
+      slope_min, slope_max = args.tnh_slope
+      assert slope_max > slope_min, "Max slope must be larger than min slope."
+      assert slope_min > 0, "All slopes must be strictly positive."
+      # log_uniform sampling to ensure more even sampling between 1 > slope > slope_min
+      slope_min, slope_max = math.log(slope_min), math.log(slope_max)
+      tnh_slopes_v = torch.rand((1, self.atoms)) * (slope_max - slope_min) + slope_min
+      tnh_slopes_a = torch.rand((1, self.atoms * self.action_space)) * (slope_max - slope_min) + slope_min
+      tnh_slopes_v = torch.exp(tnh_slopes_v)
+      tnh_slopes_a = torch.exp(tnh_slopes_a)
+
+      if args.max_tnh_shift is not None:
+        shifts_v = torch.rand((1, self.atoms)) * 2 * args.max_tnh_shift - args.max_tnh_shift
+        shifts_a = torch.rand((1, self.atoms * self.action_space)) * 2 * args.max_tnh_shift - args.max_tnh_shift
+      else:
+        shifts_v = torch.zeros((1, self.atoms), dtype=torch.float16)
+        shifts_a = torch.zeros((1, self.atoms * self.action_space), dtype=torch.float16)
+
+      if args.Q_bias is not None:
+        Q_biases = torch.rand((1, self.action_space, self.atoms)) * 2 * args.Q_bias - args.Q_bias
+      else:
+        Q_biases = torch.zeros((1, self.action_space, self.atoms))
+
+    else:
+      source_dict = source_net.state_dict()
+      tnh_slopes_v = source_dict['tnh_slopes_v'].detach().clone()
+      tnh_slopes_a = source_dict['tnh_slopes_a'].detach().clone()
+      shifts_v = source_dict['shifts_v'].detach().clone()
+      shifts_a = source_dict['shifts_a'].detach().clone()
+      Q_biases = source_dict['Q_biases'].detach().clone()
+
+    self.register_buffer('tnh_slopes_v', tnh_slopes_v)
+    self.register_buffer('tnh_slopes_a', tnh_slopes_a)
+    self.register_buffer('shifts_v', shifts_v)
+    self.register_buffer('shifts_a', shifts_a)
+    self.register_buffer('Q_biases', Q_biases)
+
+  def forward(self, x):
+    x = self.convs(x)
+    x = x.view(-1, self.conv_output_size)
+    v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
+    a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
+    v *= self.tnh_slopes_v
+    a *= self.tnh_slopes_a
+    v = self.Vmax * torch.tanh(v) + self.shifts_v
+    a = self.Vmax * torch.tanh(a) + self.shifts_a
+
+    v, a = v.view(-1, 1, self.atoms), a.view(-1, self.action_space, self.atoms)
+    q = v + a - a.mean(1, keepdim=True)  # Combine streams
+
+    return q

@@ -7,7 +7,7 @@ from torch import optim
 from torch.nn.utils import clip_grad_norm_
 import torch.nn.functional as F
 
-from model import C51, DQN, mean_var_DQN, mean_var_DQN2, mean_var_DQNa, mean_var_skew_DQN
+from model import C51, DQN, mean_var_DQN, mean_var_DQN2, mean_var_DQNa, mean_var_skew_DQN, vector_DQN
 
 
 class Rainbow():
@@ -220,7 +220,7 @@ class Rainbow_DQN():
     # Sample transitions
     idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
 
-    # Calculate current state probabilities (online network noise already sampled)
+    # Calculate current state-action values (online network noise already sampled)
     Qs = self.online_net(states)  # Q(s_t, ·; θonline)
     Qs_a = Qs[range(self.batch_size), actions]  # Q(s_t, a_t; θonline)
 
@@ -984,7 +984,97 @@ class Rainbow_mean_var_DQN2():
   def eval(self):
     self.online_net.eval()
 
+'''
+1) rand slope and output biases
+2) rand slope, vert shifts
+3) rand slope, output biases, vertical shifts
+'''
+class Rainbow_vec_DQN(Rainbow):
+  def __init__(self, args, env):
+    self.action_space = env.action_space()
+    self.atoms = args.atoms
+    self.Vmin = args.V_min
+    self.Vmax = args.V_max
+    self.batch_size = args.batch_size
+    self.n = args.multi_step
+    self.discount = args.discount
+    self.norm_clip = args.norm_clip
+    self.track_grads = args.track_grads
+    self.target_mean = args.vec_target_mean
 
+    self.online_net = vector_DQN(args, self.action_space).to(device=args.device)
+    if args.model:  # Load pretrained model if provided
+      if os.path.isfile(args.model):
+        state_dict = torch.load(args.model, map_location='cpu')  # Always load tensors onto CPU by default, will shift to GPU if necessary
+        if 'conv1.weight' in state_dict.keys():
+          for old_key, new_key in (('conv1.weight', 'convs.0.weight'), ('conv1.bias', 'convs.0.bias'), ('conv2.weight', 'convs.2.weight'), ('conv2.bias', 'convs.2.bias'), ('conv3.weight', 'convs.4.weight'), ('conv3.bias', 'convs.4.bias')):
+            state_dict[new_key] = state_dict[old_key]  # Re-map state dict for old pretrained models
+            del state_dict[old_key]  # Delete old keys for strict load_state_dict
+        self.online_net.load_state_dict(state_dict)
+        print("Loading pretrained model: " + args.model)
+      else:  # Raise error if incorrect model path provided
+        raise FileNotFoundError(args.model)
+
+    self.Q_biases = self.online_net.Q_biases
+    self.Q_biases_expanded = self.Q_biases.expand(self.batch_size, self.action_space, self.atoms)
+
+    self.online_net.train()
+
+    self.target_net = vector_DQN(args, self.action_space, self.online_net).to(device=args.device)
+    self.update_target_net()
+    self.target_net.train()
+    for param in self.target_net.parameters():
+      param.requires_grad = False
+
+    self.optimiser = optim.Adam(self.online_net.parameters(), lr=args.learning_rate, eps=args.adam_eps)
+
+  def act(self, state):
+    with torch.no_grad():
+      return (self.online_net(state.unsqueeze(0)) - self.Q_biases).mean(2).argmax(1).item()
+
+  def learn(self, mem):
+    # Sample transitions
+    idxs, states, actions, returns, next_states, nonterminals, weights = mem.sample(self.batch_size)
+
+    # Calculate current state-action values (online network noise already sampled)
+    Qs = self.online_net(states)  # Q(s_t, ·; θonline)
+    Qs_a = Qs[range(self.batch_size), actions, :]  # Q(s_t, a_t; θonline)
+    max_Q = torch.max(torch.abs(Qs)).detach().cpu().item()
+
+    with torch.no_grad():
+      # Calculate target Q-values
+      Q_vec_target = self.online_net(next_states) - self.Q_biases
+      Qns = Q_vec_target.mean(dim=-1)
+      argmax_indices_ns = Qns.argmax(1)  # Perform argmax action selection using online network: argmax_a[Q(s_t+n, a; θonline)]
+      self.target_net.reset_noise()  # Sample new target net noise
+
+      Q_vec_target = self.target_net(next_states) - self.Q_biases # Q(s_t+n, ·; θtarget)
+      Qns_a = Q_vec_target[range(self.batch_size), argmax_indices_ns, :]  # Double-Q vals Q(s_t+n, argmax_a[Q(s_t+n, a; θonline)]; θtarget)
+      biases = self.Q_biases_expanded[range(self.batch_size), argmax_indices_ns, :]
+      if self.target_mean:
+        Qns_a = Qns_a.mean(-1, keepdim=True)
+      Q_target = returns.unsqueeze(1) + nonterminals * (self.discount ** self.n) * Qns_a + biases # Q_target = R^n + (γ^n)Qns_a (accounting for terminal states)
+
+    loss = F.mse_loss(Qs_a, Q_target)
+    self.online_net.zero_grad()
+    (weights * loss).mean().backward()  # Backpropagate importance-weighted minibatch loss
+    pre_clip_norm = clip_grad_norm_(self.online_net.parameters(), self.norm_clip)  # Clip gradients by L2 norm
+    post_clip_norm = clip_grad_norm_(self.online_net.parameters(), float('inf'))  # get grad norm before clipping
+    self.optimiser.step()
+
+    mem.update_priorities(idxs, loss.detach().cpu().numpy())  # Update priorities of sampled transitions
+
+    losses = {"total loss": loss.detach().cpu().numpy().mean(), "max Q output": max_Q}
+    if self.track_grads:
+      grad_norms = {"pre_clip_norm": pre_clip_norm.detach().cpu().item(), "post_clip_norm" : post_clip_norm.detach().cpu().item()}
+    else:
+      grad_norms = {}
+    return losses, grad_norms
+
+  # Evaluates Q-value based on single state (no batch)
+  def evaluate_q(self, state):
+    with torch.no_grad():
+      return (self.online_net(state.unsqueeze(0)) - self.Q_biases).mean(2).max(1)[0].item()
 
 # class Rainbow_mean_var_skew_DQN():
 #   def __init__(self, args, env):

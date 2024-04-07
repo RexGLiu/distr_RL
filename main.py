@@ -12,7 +12,7 @@ import torch
 from tqdm import trange
 
 from agent import Rainbow, Rainbow_DQN51, Rainbow_DQN, Rainbow_mean_var_DQN, Rainbow_mean_var_DQN2, \
-  Rainbow_mean_var_DQNa, Rainbow_mean_var_51, \
+  Rainbow_mean_var_DQNa, Rainbow_mean_var_51, Rainbow_vec_DQN, \
   Rainbow_DQN51_ent, Rainbow_DQN51_cross_ent, Rainbow_DQN51_v2, Rainbow_DQN51_v3
 from env import Env
 from memory import ReplayMemory
@@ -28,7 +28,7 @@ parser.add_argument('--seed', type=int, default=123, help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
 parser.add_argument('--game', type=str, default='space_invaders', choices=atari_py.list_games(), help='ATARI game')
 parser.add_argument('--algo', type=str, default='Rainbow', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_DQN', 'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
-                                                                    'Rainbow_mean_var_DQNa', 'Rainbow_mean_var_51',
+                                                                    'Rainbow_mean_var_DQNa', 'Rainbow_mean_var_51', 'Rainbow_vec_DQN',
                                                                     'Rainbow_DQN51_ent', 'Rainbow_DQN51_cross_ent', 'Rainbow_DQN51_v2',
                                                                     'Rainbow_DQN51_v3'], help='Which RL algorithm to run')
 parser.add_argument('--T-max', type=int, default=int(50e6), metavar='STEPS', help='Number of training steps (4x number of frames)')
@@ -65,7 +65,11 @@ parser.add_argument('--checkpoint-interval', type=int, default=0, help='How ofte
 parser.add_argument('--memory', help='Path to save/load the memory from')
 parser.add_argument('--disable-bzip-memory', action='store_true', help='Don\'t zip the memory file. Not recommended (zipping is a bit slower and much, much smaller)')
 parser.add_argument('--enable-wandb', action='store_true', help='Enable Weights and Biases for logging')
-parser.add_argument('--weight', type=float, default=1, metavar='lambda', help='Weight for auxiliary loss')
+parser.add_argument('--weight', type=float, default=1, metavar='w', help='Weight for auxiliary loss')
+parser.add_argument('--max-tnh-shift', type=float, default=1.5, metavar='K', help='Maximum range for random shifts to apply to tanh outputs in vector DQN.')
+parser.add_argument('--tnh-slope', type=float, default=(0.1,5), metavar='b', help='Range of slopes for tanh inputs in vector DQN.')
+parser.add_argument('--Q-bias', type=float, default=1.5, metavar='Q_bias', help='Maximum range of random biases to apply to vector Q-values.')
+parser.add_argument('--vec-target-mean', action='store_false', help='Whether to construct target Q-value from averaging across all atoms or not in vector_DQN.')
 parser.add_argument('--track-grads', action='store_false', help='Track gradients.')
 
 # Setup
@@ -132,12 +136,6 @@ action_space = env.action_space()
 #
 if args.algo == "Rainbow":
   agent = Rainbow(args, env)
-elif args.algo == "Rainbow_DQN51":
-  agent = Rainbow_DQN51(args, env)
-elif args.algo == 'Rainbow_DQN51_v2':
-  agent = Rainbow_DQN51_v2(args, env)
-elif args.algo == 'Rainbow_DQN51_v3':
-  agent = Rainbow_DQN51_v3(args, env)
 elif args.algo == "Rainbow_DQN":
   agent = Rainbow_DQN(args, env)
 elif args.algo == "Rainbow_mean_var_DQN":
@@ -146,12 +144,20 @@ elif args.algo == "Rainbow_mean_var_DQN2":
   agent = Rainbow_mean_var_DQN2(args, env)
 elif args.algo == "Rainbow_mean_var_DQNa":
   agent = Rainbow_mean_var_DQNa(args, env)
-elif args.algo == "Rainbow_mean_var_51":
-  agent = Rainbow_mean_var_51(args, env)
+elif args.algo == "Rainbow_vec_DQN":
+  agent = Rainbow_vec_DQN(args, env)
+elif args.algo == "Rainbow_DQN51":
+  agent = Rainbow_DQN51(args, env)
+elif args.algo == 'Rainbow_DQN51_v2':
+  agent = Rainbow_DQN51_v2(args, env)
+elif args.algo == 'Rainbow_DQN51_v3':
+  agent = Rainbow_DQN51_v3(args, env)
 elif args.algo == "Rainbow_DQN51_ent":
   agent = Rainbow_DQN51_ent(args, env)
 elif args.algo == "Rainbow_DQN51_cross_ent":
   agent = Rainbow_DQN51_cross_ent(args, env)
+elif args.algo == "Rainbow_mean_var_51":
+  agent = Rainbow_mean_var_51(args, env)
 
 # If a model is provided, and evaluate is false, presumably we want to resume, so try to load memory
 if args.model is not None and not args.evaluate:
