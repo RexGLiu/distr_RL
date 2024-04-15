@@ -18,6 +18,10 @@ from test import test_and_store
 
 import wandb
 
+'''
+Script for storing Breakout game frames at different reward levels for future evaluation on trained agents.
+'''
+
 
 # Note that hyperparameters may originally be reported in ATARI game frames instead of agent steps
 parser = argparse.ArgumentParser(description='Rainbow')
