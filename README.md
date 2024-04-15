@@ -1,1 +1,1 @@
-Distributional RL experiments for Atari ALE. Codebase modified from https://github.com/Kaixhin/Rainbow with additional agents, architecture models, and evaluation procedures.
+Scripts for distributional RL experiments involving Atari ALE. Codebase modified from https://github.com/Kaixhin/Rainbow with additional agents, architecture models, and evaluation procedures. Project still under development.
