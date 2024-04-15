@@ -84,6 +84,7 @@ class C51(nn.Module):
       if 'fc' in name:
         module.reset_noise()
 
+
 class DQN(nn.Module):
   def __init__(self, args, action_space):
     super(DQN, self).__init__()
@@ -163,52 +164,6 @@ class mean_var_DQN(nn.Module):
         module.reset_noise()
 
 
-class mean_var_DQNa(nn.Module):
-  def __init__(self, args, action_space):
-    super(mean_var_DQNa, self).__init__()
-    self.action_space = action_space
-
-    if args.architecture == 'canonical':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 8, stride=4, padding=0), nn.ReLU(),
-                                 nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
-                                 nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
-      self.conv_output_size = 3136
-    elif args.architecture == 'data-efficient':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 5, stride=5, padding=0), nn.ReLU(),
-                                 nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
-      self.conv_output_size = 576
-    self.fc_h_v = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_h_a = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_z_v = NoisyLinear(args.hidden_size, 1, std_init=args.noisy_std)
-    self.fc_z_a = NoisyLinear(args.hidden_size, action_space, std_init=args.noisy_std)
-
-    self.fc_h_var_v = nn.Linear(self.conv_output_size, args.hidden_size)
-    self.fc_h_var_a = nn.Linear(self.conv_output_size, args.hidden_size)
-    self.fc_z_var_v = nn.Linear(args.hidden_size, 1)
-    self.fc_z_var_a = nn.Linear(args.hidden_size, action_space)
-
-  def forward(self, x):
-    x = self.convs(x)
-    x = x.view(-1, self.conv_output_size)
-    v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
-    a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
-    v, a = v.view(-1, 1), a.view(-1, self.action_space)
-    q = v + a - a.mean(1, keepdim=True)  # Combine streams
-
-    var_v = self.fc_z_var_v(F.relu(self.fc_h_var_v(x)))  # Value stream
-    var_a = self.fc_z_var_a(F.relu(self.fc_h_var_a(x)))  # Advantage stream
-    var_v, var_a = var_v.view(-1, 1), var_a.view(-1, self.action_space)
-    var_q = var_v + var_a - var_a.mean(1, keepdim=True)  # Combine streams
-
-    return q, var_q   # [batch, action_space]
-
-  def reset_noise(self):
-    for name, module in self.named_children():
-      if 'fc' in name and 'var' not in name:
-        module.reset_noise()
-
-
-
 class mean_var_DQN2(nn.Module):
   def __init__(self, args, action_space):
     super(mean_var_DQN2, self).__init__()
@@ -251,55 +206,6 @@ class mean_var_DQN2(nn.Module):
       if 'fc' in name:
         module.reset_noise()
 
-
-class mean_var_skew_DQN(nn.Module):
-  def __init__(self, args, action_space):
-    super(mean_var_skew_DQN, self).__init__()
-    self.action_space = action_space
-
-    if args.architecture == 'canonical':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 8, stride=4, padding=0), nn.ReLU(),
-                                 nn.Conv2d(32, 64, 4, stride=2, padding=0), nn.ReLU(),
-                                 nn.Conv2d(64, 64, 3, stride=1, padding=0), nn.ReLU())
-      self.conv_output_size = 3136
-    elif args.architecture == 'data-efficient':
-      self.convs = nn.Sequential(nn.Conv2d(args.history_length, 32, 5, stride=5, padding=0), nn.ReLU(),
-                                 nn.Conv2d(32, 64, 5, stride=5, padding=0), nn.ReLU())
-      self.conv_output_size = 576
-    self.fc_h_v = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_h_a = NoisyLinear(self.conv_output_size, args.hidden_size, std_init=args.noisy_std)
-    self.fc_z_v = NoisyLinear(args.hidden_size, 1, std_init=args.noisy_std)
-    self.fc_z_a = NoisyLinear(args.hidden_size, action_space, std_init=args.noisy_std)
-
-    self.fc_z_var_v = NoisyLinear(args.hidden_size, 1, std_init=args.noisy_std)
-    self.fc_z_var_a = NoisyLinear(args.hidden_size, action_space, std_init=args.noisy_std)
-
-    self.fc_z_skew_v = NoisyLinear(args.hidden_size, 1, std_init=args.noisy_std)
-    self.fc_z_skew_a = NoisyLinear(args.hidden_size, action_space, std_init=args.noisy_std)
-  def forward(self, x):
-    x = self.convs(x)
-    x = x.view(-1, self.conv_output_size)
-    v = self.fc_z_v(F.relu(self.fc_h_v(x)))  # Value stream
-    a = self.fc_z_a(F.relu(self.fc_h_a(x)))  # Advantage stream
-    v, a = v.view(-1, 1), a.view(-1, self.action_space)
-    q = v + a - a.mean(1, keepdim=True)  # Combine streams
-
-    var_v = self.fc_z_var_v(F.relu(self.fc_h_v(x)))  # Value stream
-    var_a = self.fc_z_var_a(F.relu(self.fc_h_a(x)))  # Advantage stream
-    var_v, var_a = var_v.view(-1, 1), var_a.view(-1, self.action_space)
-    var_q = var_v + var_a - var_a.mean(1, keepdim=True)  # Combine streams
-
-    skew_v = self.fc_z_skew_v(F.relu(self.fc_h_v(x)))  # Value stream
-    skew_a = self.fc_z_skew_a(F.relu(self.fc_h_a(x)))  # Advantage stream
-    skew_v, skew_a = skew_v.view(-1, 1), skew_a.view(-1, self.action_space)
-    skew_q = skew_v + skew_a - skew_a.mean(1, keepdim=True)  # Combine streams
-
-    return q, var_q, skew_q   # [batch, action_space]
-
-  def reset_noise(self):
-    for name, module in self.named_children():
-      if 'fc' in name:
-        module.reset_noise()
 
 class vector_DQN(C51):
   '''Random slopes and output biases.'''
