@@ -19,6 +19,7 @@ from memory import ReplayMemory
 from test import test
 
 import wandb
+import random
 
 
 # Note that hyperparameters may originally be reported in ATARI game frames instead of agent steps
@@ -105,6 +106,7 @@ for k, v in vars(args).items():
 
 metrics = {'steps': [], 'rewards': [], 'Qs': [], 'best_avg_reward': -float('inf')}
 np.random.seed(args.seed)
+random.seed(args.seed)
 torch.manual_seed(np.random.randint(1, 10000))
 if torch.cuda.is_available() and not args.disable_cuda:
   args.device = torch.device('cuda')
