@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from tqdm import trange
 
-from agent import Rainbow, Rainbow_DQN51, Rainbow_DQN, Rainbow_mean_var_DQN, Rainbow_mean_var_DQN2, \
+from agent import Rainbow, Rainbow_DQN51, Rainbow_mean_var_D51, Rainbow_DQN, Rainbow_mean_var_DQN, Rainbow_mean_var_DQN2, \
   Rainbow_mean_var_DQNa, Rainbow_mean_var_51, Rainbow_vec_DQN, \
   Rainbow_DQN51_ent, Rainbow_DQN51_cross_ent, Rainbow_DQN51_v2, Rainbow_DQN51_v3
 from env import Env
@@ -35,7 +35,8 @@ parser.add_argument('--render', action='store_true', help='Display screen (testi
 
 # Warning: all parameters below will be ignored if loading from checkpoint
 parser.add_argument('--game', type=str, default='space_invaders', choices=atari_py.list_games(), help='ATARI game')
-parser.add_argument('--algo', type=str, default='Rainbow', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_DQN', 'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
+parser.add_argument('--algo', type=str, default='Rainbow', choices=['Rainbow', 'Rainbow_DQN51', 'Rainbow_mean_var_D51', 'Rainbow_DQN',
+                                                                    'Rainbow_mean_var_DQN', 'Rainbow_mean_var_DQN2',
                                                                     'Rainbow_mean_var_DQNa', 'Rainbow_mean_var_51', 'Rainbow_vec_DQN',
                                                                     'Rainbow_DQN51_ent', 'Rainbow_DQN51_cross_ent', 'Rainbow_DQN51_v2',
                                                                     'Rainbow_DQN51_v3'], help='Which RL algorithm to run')
@@ -175,6 +176,8 @@ elif args.algo == "Rainbow_vec_DQN":
   agent = Rainbow_vec_DQN(args, env)
 elif args.algo == "Rainbow_DQN51":
   agent = Rainbow_DQN51(args, env)
+elif args.algo == "Rainbow_mean_var_D51":
+  agent = Rainbow_mean_var_D51(args, env)
 elif args.algo == 'Rainbow_DQN51_v2':
   agent = Rainbow_DQN51_v2(args, env)
 elif args.algo == 'Rainbow_DQN51_v3':
